@@ -3,6 +3,7 @@ import org.apache.zookeeper.*;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.logging.Logger;
 
 /**
@@ -11,7 +12,6 @@ import java.util.logging.Logger;
 public class LeaderElection extends Thread {
 
     Logger logger = Logger.getLogger(this.getName());
-
 
     ZooKeeper zookeeper;
 
@@ -26,10 +26,42 @@ public class LeaderElection extends Thread {
     private List<String> childrens;
     private String prevPath;
 
-    public static void main(String[] args) throws IOException, KeeperException, InterruptedException {
+    private boolean isLeader = false;
+    private Callable<Object> callable;
 
-        Thread thread = new LeaderElection();
-        thread.start();
+    public LeaderElection(Callable<Object> callable) {
+        this.callable = callable;
+    }
+
+    public static void main(String[] args) throws Exception {
+
+        LeaderElection thread1 = new LeaderElection(new Callable<Object>() {
+            public Object call() throws Exception {
+                // TODO 异步回调
+                return null;
+            }
+        });
+        thread1.start();
+
+
+        System.out.println("isLeader:" + thread1.syncElection());
+    }
+
+    // 同步选举
+    public boolean syncElection() throws Exception {
+        if(!isLeader) {
+            synchronized (this) {
+                Thread.sleep(2000);
+                System.out.println("start");
+                this.wait();
+            }
+        }
+        return isLeader;
+    }
+
+    // 异步选举
+    public boolean asyncElection() {
+        return this.isLeader;
     }
 
     public void run() {
@@ -93,10 +125,10 @@ public class LeaderElection extends Thread {
         logger.info(this.getSelfName() + ": start listen " + PARENT_PATH + "/" + this.prevPath);
     }
 
-    private void prevPathWasDeleted(){
-        if(isPrevPathLeader()){
+    private void prevPathWasDeleted() {
+        if (isPrevPathLeader()) {
             this.publicLeaderMessage();
-        }else{
+        } else {
             try {
                 this.listenPrevPath();
             } catch (KeeperException e) {
@@ -108,7 +140,7 @@ public class LeaderElection extends Thread {
     }
 
     private String createPath() throws KeeperException, InterruptedException {
-        String path = this.zooKeeper.create(PARENT_PATH+PATH, DATA, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+        String path = this.zooKeeper.create(PARENT_PATH + PATH, DATA, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
         String[] paths = path.split("/");
         String res = paths[paths.length - 1];
         logger.info("path was created: " + res);
@@ -117,13 +149,14 @@ public class LeaderElection extends Thread {
 
     /**
      * 获取上一个节点名称
+     *
      * @return
      */
     private void getPrevNode() {
         sortChildrens();
-        for(int i = 0; i < this.childrens.size(); i++){
-            if(curPath.equals(this.childrens.get(i))){
-                this.prevPath = this.childrens.get(i-1);
+        for (int i = 0; i < this.childrens.size(); i++) {
+            if (curPath.equals(this.childrens.get(i))) {
+                this.prevPath = this.childrens.get(i - 1);
                 return;
             }
         }
@@ -136,6 +169,17 @@ public class LeaderElection extends Thread {
 
     private void publicLeaderMessage() {
         logger.info(this.getSelfName() + ": I am Leader now!! " + this.curPath);
+        this.isLeader = true;
+        synchronized (this) {
+            this.notify();
+        }
+        if(null != this.callable){
+            try {
+                callable.call();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     private int getPathNum(String path) {
@@ -153,7 +197,7 @@ public class LeaderElection extends Thread {
 
         this.sortChildrens();
 
-        if(this.getPathNum(this.prevPath) < this.getPathNum(this.childrens.get(0))){
+        if (this.getPathNum(this.prevPath) < this.getPathNum(this.childrens.get(0))) {
             return true;
         }
         return false;
